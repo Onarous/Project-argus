@@ -411,9 +411,12 @@ pub fn build_args(args: &StartModelArgs, snap: &crate::state::ClusterSnapshot) -
             // happens exactly when the model does not fit as planned, which is the case we
             // care about. With -ngl unset the default (-1 = auto) stays in charge and --fit
             // lays the layers out itself: llama-model.cpp splits the devices by their FREE
-            // memory (all_zero branch), so the CPU pseudo-node and the RPC nodes each take
-            // what they can hold.
-            // (the CPU share of the plan is applied by llama.cpp itself, not by -ngl)
+            // memory (all_zero branch), so the RPC nodes and the GPU each take what they
+            // can hold.
+            // The plan's CPU share (cpu_layers) is informational only: llama.cpp assigns
+            // layers to the --device list by free memory, and a CPU device cannot be listed
+            // there at all (parse_device_list rejects CPU devices). -t still sets the CPU
+            // thread count.
             // MoE: expert tensors of the offloaded blocks to rpc buffers / CPU (after --rpc)
             if let Some(ot) = crate::split::ot_arg(&full, &rpc) { push(&["-ot", &ot]); }
             // vision projector would default to the first device (an RPC phone): keep it on the local GPU
@@ -1222,14 +1225,19 @@ mod tests {
         build_args(&args, &pc_and_laptop()).unwrap_or_else(|e| panic!("build_args failed: {e}"))
     }
     #[test]
-    fn no_ngl_999_and_no_ts_so_llama_fit_works() {
+    fn no_ngl_and_no_ts_so_llama_fit_works() {
         // 0.3.5: llama.cpp --fit refuses to run when the user set n_gpu_layers or tensor_split.
         // Argus used to pass -ngl 999 and -ts, which killed --fit whenever the model did
         // not fit as planned (the engine then kept the Argus split instead).
+        //
+        // -ngl must not be passed with ANY value: --fit compares n_gpu_layers with the
+        // default (-1) numerically (common/fit.cpp:544), so -ngl 27 breaks --fit exactly like
+        // -ngl 999 does. Checking for "999" alone would miss that.
         let a = args_for_pc_and_laptop();
         assert!(!a.iter().any(|x| x == "-ts"), "-ts must not be passed: it breaks --fit");
+        assert!(!a.iter().any(|x| x == "-ngl"), "-ngl must not be passed at all: {a:?}");
         assert!(!a.iter().any(|x| x == "999"), "-ngl 999 must not be passed any more");
-        assert!(!a.windows(2).any(|w| w == ["-ngl", "999"]));
+        assert!(!a.windows(2).any(|w| w[0] == "-ngl"), "no -ngl with any value: {a:?}");
     }
     #[test]
     fn mmdev_flag_is_valid_for_llama_server() {
