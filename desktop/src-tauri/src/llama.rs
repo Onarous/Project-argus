@@ -403,17 +403,17 @@ pub fn build_args(args: &StartModelArgs, snap: &crate::state::ClusterSnapshot) -
             push(&["--device", "none"]); // every device disabled: CPU only
         } else {
             push(&["--device", &devices.join(",")]);
-            // CPU pseudo-node: the FIRST cpu_layers layers stay on the PC CPU (-ngl < n_layer + 1)
+            // CPU pseudo-node: the FIRST cpu_layers layers stay on the PC CPU.
             //
-            // 0.3.5: -ngl is only passed when the layer count is known. An explicit -ngl
-            // (999 or anything != -1) makes llama.cpp --fit abort with "n_gpu_layers already
-            // set by user", so the engine never fits the model to the real free memory of
-            // the RPC nodes. Leaving -ngl unset keeps the default (-1 = auto) and lets --fit
-            // pick the split itself.
-            match full.n_layers.filter(|_| full.cpu_layers > 0 && full.moe.is_none()) {
-                Some(nl) => push(&["-ngl", &(nl + 1).saturating_sub(full.cpu_layers).max(1).to_string()]),
-                None => {} // no layer count: leave -ngl unset so --fit stays in charge
-            }
+            // 0.3.5: -ngl is NEVER passed. llama.cpp --fit compares n_gpu_layers with the
+            // default (-1) NUMERICALLY (common/fit.cpp:544), so any explicit value (999, 27,
+            // 36) makes --fit abort with "n_gpu_layers already set by user" — and the abort
+            // happens exactly when the model does not fit as planned, which is the case we
+            // care about. With -ngl unset the default (-1 = auto) stays in charge and --fit
+            // lays the layers out itself: llama-model.cpp splits the devices by their FREE
+            // memory (all_zero branch), so the CPU pseudo-node and the RPC nodes each take
+            // what they can hold.
+            // (the CPU share of the plan is applied by llama.cpp itself, not by -ngl)
             // MoE: expert tensors of the offloaded blocks to rpc buffers / CPU (after --rpc)
             if let Some(ot) = crate::split::ot_arg(&full, &rpc) { push(&["-ot", &ot]); }
             // vision projector would default to the first device (an RPC phone): keep it on the local GPU

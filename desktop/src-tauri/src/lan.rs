@@ -38,10 +38,15 @@ const UMA_HEADROOM_MB: u64 = 1024;
 /// had, and the node died with an OOM that killed the whole desktop session. The beacon
 /// carries the real system RAM of the node (ram_mb / free_mb), so the shared case keeps a
 /// headroom for the OS. Returns (usable_mb, shares_system_ram).
-fn usable_node_mb(rpc_free_mb: u64, rpc_total_mb: u64, sys_total_mb: Option<u64>) -> (u64, bool) {
+///
+/// `variant_uma` is a fallback for when no beacon arrived (the node runs only rpc-server):
+/// a Vulkan build on x86 is an integrated GPU, i.e. shared system RAM.
+fn usable_node_mb(rpc_free_mb: u64, rpc_total_mb: u64, sys_total_mb: Option<u64>, variant_uma: bool) -> (u64, bool) {
     let sys = sys_total_mb.filter(|v| *v > 0);
     // the device is smaller than the whole system RAM => it is a window into it (UMA)
-    let shared = matches!(sys, Some(t) if rpc_total_mb > 0 && rpc_total_mb < t);
+    let shared = matches!(sys, Some(t) if rpc_total_mb > 0 && rpc_total_mb < t)
+        // no beacon: a Vulkan build on x86 is an integrated GPU (UMA) by definition
+        || (sys.is_none() && variant_uma);
     let usable = if shared {
         (rpc_free_mb.saturating_sub(UMA_HEADROOM_MB) * 80 / 100).min(rpc_total_mb)
     } else {
@@ -278,7 +283,8 @@ pub async fn refresh(st: &Arc<AppState>) {
                 // 0.3.5: a UMA node reports a window into its system RAM. Keep a headroom for
                 // the OS so the plan never asks the node for more than it can hold.
                 let sys_total = beacon.as_ref().map(|b| b.ram_mb);
-                let (usable, _shared) = usable_node_mb(free, total, sys_total);
+                let variant_uma = n.variant.as_deref().map(|v| v.contains("vulkan") && v.contains("x64")).unwrap_or(false);
+                let (usable, _shared) = usable_node_mb(free, total, sys_total, variant_uma);
                 n.usable_mb = usable;
                 n.rpc_devices = info.mem.len() as u32;
                 n.version = Some(format!("rpc v{}.{}.{}", info.version.0, info.version.1, info.version.2));
@@ -290,7 +296,7 @@ pub async fn refresh(st: &Arc<AppState>) {
                 if let Some(b) = &beacon { if b.free_mb > 0 { n.available_mb = b.free_mb; } }
                 if n.total_mb == 0 { if let Some(b) = &beacon {
                     n.total_mb = b.ram_mb;
-                    let (usable, _shared) = usable_node_mb(b.free_mb, b.ram_mb, Some(b.ram_mb));
+                    let (usable, _shared) = usable_node_mb(b.free_mb, b.ram_mb, Some(b.ram_mb), false);
                     n.usable_mb = usable;
                 } }
                 n.stage = NodeStage::Connected;
@@ -317,7 +323,7 @@ mod tests {
     fn uma_node_keeps_headroom_for_the_os() {
         // a UMA laptop: the rpc-server reports a window into the system RAM
         // (device total < the node RAM) => keep a headroom for the OS
-        let (usable, shared) = usable_node_mb(7000, 8000, Some(15279));
+        let (usable, shared) = usable_node_mb(7000, 8000, Some(15279), false);
         assert!(shared, "a device smaller than the node RAM shares it");
         assert!(usable < 7000, "the OS needs a headroom: {usable}");
         assert!(usable > 4000, "but most of the RAM is still usable: {usable}");
@@ -325,15 +331,24 @@ mod tests {
     #[test]
     fn dedicated_node_keeps_the_old_share() {
         // a real device with its own memory (a phone / a discrete GPU node): unchanged
-        let (usable, shared) = usable_node_mb(4000, 8000, Some(3700));
+        let (usable, shared) = usable_node_mb(4000, 8000, Some(3700), false);
         assert!(!shared);
         assert_eq!(usable, 3200);
     }
     #[test]
     fn no_system_info_falls_back_to_the_rpc_numbers() {
-        let (usable, shared) = usable_node_mb(4000, 8000, None);
+        let (usable, shared) = usable_node_mb(4000, 8000, None, false);
         assert!(!shared);
         assert_eq!(usable, 3200);
+    }
+    #[test]
+    fn vulkan_x64_node_is_uma_even_without_a_beacon() {
+        // no beacon (the node runs only rpc-server): a Vulkan build on x86 is an integrated
+        // GPU, so its "device" is a window into the system RAM and needs the OS headroom
+        let (usable, shared) = usable_node_mb(7000, 8000, None, true);
+        assert!(shared, "a Vulkan x64 node shares its memory with the OS");
+        assert!(usable < 7000, "the OS needs a headroom: {usable}");
+        assert_eq!(usable, (7000 - UMA_HEADROOM_MB) * 80 / 100);
     }
 }
 fn display_name(l: &LanNode) -> String {
