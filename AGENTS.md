@@ -20,7 +20,9 @@
   `lan.rs` (LAN-ноды по RPC), `cluster.rs`, `gpu.rs`, `settings.rs`, `state.rs`.
 - `android/` — Argus Node (APK) для телефонов.
 - `scripts/` — `argus-node-linux.sh` (нода для Linux/RPi: rpc-server + UDP-маяк 50053).
-- `docs/`, `.github/`.
+- `docs/` — `ARCHITECTURE.md`, `ROLES.md`, `NPU.md` (NPU-бэкенд на ноутбуке: работает,
+  но в Argus не подключается — ACCEL отбрасывается в rpc-server).
+- `.github/`.
 
 ## Ключевые константы
 - RPC протокол major = 8 (ggml-rpc.h @ llama.cpp b12008), `lan.rs:23`.
