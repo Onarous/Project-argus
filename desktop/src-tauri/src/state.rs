@@ -8,13 +8,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tokio::{process::Child, sync::Mutex, task::AbortHandle};
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum NodeKind { Gpu, Cpu, Phone, Tablet, Lan }
+pub enum NodeKind { #[default] Gpu, Cpu, Phone, Tablet, Lan }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum NodeStage { Unauthorized, Installing, Updating, Forwarding, Starting, Syncing, Connected, Offline, Error }
+pub enum NodeStage { #[default] Offline, Unauthorized, Installing, Updating, Forwarding, Starting, Syncing, Connected, Error }
 
 impl NodeStage {
     /// provisioning in progress: the cluster is not settled yet
@@ -23,11 +23,11 @@ impl NodeStage {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum Transport { Local, Usb, Lan }
+pub enum Transport { #[default] Local, Usb, Lan }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
     pub id: String,
@@ -168,11 +168,11 @@ pub struct DiscoveredView {
     pub outdated: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EngineStatus {
     /// nothing running (or stopped by the user)
-    Idle,
+    #[default] Idle,
     /// process started, /health not 200 yet (download / weight upload)
     Loading,
     Ready,
@@ -221,7 +221,7 @@ impl Default for EngineState {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineView {
     pub status: EngineStatus,
@@ -236,7 +236,7 @@ pub struct EngineView {
     pub warming: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterSnapshot {
     /// The PC. With GPUs: aggregate of enabled local GPUs. Without: host CPU/RAM.

@@ -398,18 +398,23 @@ pub fn build_args(args: &StartModelArgs, snap: &crate::state::ClusterSnapshot) -
     if !rpc.is_empty() { push(&["--rpc", &rpc.join(",")]); }
     let local_gpu = snap.gpus.iter().find(|g| g.enabled && g.device.is_some()).and_then(|g| g.device.clone());
     if !snap.gpus.is_empty() {
-        // llama.cpp's device list is known: always pass it explicitly so -ts lines up and disabled GPUs stay idle
+        // llama.cpp's device list is known: always pass it explicitly so disabled GPUs stay idle
         if devices.is_empty() {
             push(&["--device", "none"]); // every device disabled: CPU only
         } else {
             push(&["--device", &devices.join(",")]);
-            if devices.len() > 1 { push(&["-ts", &crate::split::ts_for_plan(&full)]); }
             // CPU pseudo-node: the FIRST cpu_layers layers stay on the PC CPU (-ngl < n_layer + 1)
+            //
+            // 0.3.5: -ngl is only passed when the layer count is known. An explicit -ngl
+            // (999 or anything != -1) makes llama.cpp --fit abort with "n_gpu_layers already
+            // set by user", so the engine never fits the model to the real free memory of
+            // the RPC nodes. Leaving -ngl unset keeps the default (-1 = auto) and lets --fit
+            // pick the split itself.
             match full.n_layers.filter(|_| full.cpu_layers > 0 && full.moe.is_none()) {
                 Some(nl) => push(&["-ngl", &(nl + 1).saturating_sub(full.cpu_layers).max(1).to_string()]),
-                None => push(&["-ngl", "999"]),
+                None => {} // no layer count: leave -ngl unset so --fit stays in charge
             }
-            // MoE: expert tensors of the offloaded blocks → rpc buffers / CPU (after --rpc)
+            // MoE: expert tensors of the offloaded blocks to rpc buffers / CPU (after --rpc)
             if let Some(ot) = crate::split::ot_arg(&full, &rpc) { push(&["-ot", &ot]); }
             // vision projector would default to the first device (an RPC phone): keep it on the local GPU
             match &local_gpu {
@@ -417,11 +422,13 @@ pub fn build_args(args: &StartModelArgs, snap: &crate::state::ClusterSnapshot) -
                 None => push(&["--no-mmproj-offload"]),
             }
         }
-    } else if snap.host.kind == crate::state::NodeKind::Gpu {
-        // GPU seen only through nvidia-smi (no --list-devices): llama.cpp default split
-        push(&["-ngl", "999"]);
     }
-    // else CPU-only host: leave -ngl unset so llama.cpp --fit spreads layers over RPC nodes + host RAM
+    // 0.3.5: no -ts. -ts is llama.cpp tensor_split, and --fit refuses to run when the user
+    // already set it ("model_params::tensor_split already set by user, abort"). With more
+    // than one device (GPU + RPC node) that killed --fit for EVERY launch, so the engine kept
+    // the Argus-planned split instead of fitting the model to the real free memory. The plan's
+    // own split (-ngl / -ot) is enough; --fit fills the rest.
+    // else CPU-only host: -ngl stays unset so llama.cpp --fit spreads layers over RPC nodes + host RAM
 
     if let Some(t) = full.threads { push(&["-t", &t.to_string()]); }
     // chat sessions: POST /slots/0?action=save|restore
@@ -1187,6 +1194,51 @@ mod tests {
         let ll = crate::split::ModelInfo { arch: "llama".into(), n_vocab: 128256, ..Default::default() };
         assert!(vocab_compatible(&moe, &dr));
         assert!(!vocab_compatible(&ll, &dr));
+    }
+    /// A snapshot of the PC + laptop setup, so the built command line can be checked.
+    fn pc_and_laptop() -> crate::state::ClusterSnapshot {
+        let mut gpu = crate::state::Node::local("gpu:Vulkan0", "AMD Radeon RX 5700", crate::state::NodeKind::Gpu);
+        gpu.device = Some("Vulkan0".into());
+        gpu.usable_mb = 7382;
+        gpu.enabled = true;
+        let mut lan = crate::state::Node::lan("lan:192.168.1.82:50052", "laptop", "192.168.1.82:50052");
+        lan.stage = crate::state::NodeStage::Connected;
+        lan.enabled = true;
+        lan.usable_mb = 5000;
+        lan.available_mb = 6702;
+        lan.total_mb = 8151;
+        lan.rpc_devices = 1;
+        let cpu = crate::state::CpuInfo { brand: "Xeon".into(), threads: 10, gbps: Some(7.22), usable_mb: 2378, benching: false };
+        crate::state::ClusterSnapshot {
+            host: crate::state::Node::local("host", "PC", crate::state::NodeKind::Gpu),
+            gpus: vec![gpu],
+            nodes: vec![lan],
+            cpu,
+            ..Default::default()
+        }
+    }
+    fn args_for_pc_and_laptop() -> Vec<String> {
+        let args = StartModelArgs { model_path: Some("m.gguf".into()), need_mb: Some(8277), ctx: Some(65536), ..Default::default() };
+        build_args(&args, &pc_and_laptop()).unwrap_or_else(|e| panic!("build_args failed: {e}"))
+    }
+    #[test]
+    fn no_ngl_999_and_no_ts_so_llama_fit_works() {
+        // 0.3.5: llama.cpp --fit refuses to run when the user set n_gpu_layers or tensor_split.
+        // Argus used to pass -ngl 999 and -ts, which killed --fit whenever the model did
+        // not fit as planned (the engine then kept the Argus split instead).
+        let a = args_for_pc_and_laptop();
+        assert!(!a.iter().any(|x| x == "-ts"), "-ts must not be passed: it breaks --fit");
+        assert!(!a.iter().any(|x| x == "999"), "-ngl 999 must not be passed any more");
+        assert!(!a.windows(2).any(|w| w == ["-ngl", "999"]));
+    }
+    #[test]
+    fn mmdev_flag_is_valid_for_llama_server() {
+        // llama-server b12008 knows -mmdev / --mmproj-device, but NOT --mmdev:
+        // the two-dash form made the server exit with
+        // "error: invalid argument: --mmdev" before the model was even loaded.
+        let a = args_for_pc_and_laptop();
+        assert!(a.iter().any(|x| x == "-mmdev"), "-mmdev must be used: {a:?}");
+        assert!(!a.iter().any(|x| x == "--mmdev"), "--mmdev is not a llama-server flag");
     }
     #[test]
     fn error_lines() {

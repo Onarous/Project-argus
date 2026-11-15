@@ -143,7 +143,9 @@ pub fn strip_html(html: &str) -> String {
                 }
             }
             if matches!(name.as_str(), "p" | "div" | "br" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "table" | "section" | "dd" | "dt" | "blockquote") {
-                out.push('\n');
+                // a block tag ends a line: <p>text</p> must not become two lines (the closing tag
+                // would add a second break on top of the opening one)
+                if !out.ends_with('\n') { out.push('\n'); }
             } else if name == "td" || name == "th" { out.push(' '); }
             i += gt + 1;
         } else {

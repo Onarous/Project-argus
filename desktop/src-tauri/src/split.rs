@@ -218,7 +218,15 @@ fn plan_inner(nodes: &[Node], gpus: &[Node], need_mb: Option<u64>, role_of: &dyn
     let need = need_mb.map(|n| n as f64).filter(|n| *n > 0.0);
     let model = opts.model.clone().unwrap_or_default();
     // CPU pseudo-node: only next to a GPU (--device list known), when the model size and its layer count are known
-    if let (Some(c), false, true, Some(_)) = (&opts.cpu, opts.gpu_only, !gdevs.is_empty(), need) {
+    // CPU pseudo-node: the PC CPU can hold layers even without a local GPU (--device list
+    // known or not), when the model size and its layer count are known.
+    //
+    // 0.3.5: the GPU requirement is gone. With a LAN laptop as the only accelerator the model
+    // did not fit anywhere: the RPC node had to hold ALL layers (it is one device) and the PC
+    // CPU was left out of the plan, so the laptop ran out of memory. With the CPU node in the
+    // plan, part of the layers stays on the PC and the node only takes what it can hold.
+    let has_accel = !gdevs.is_empty() || !cand.is_empty();
+    if let (Some(c), false, true, Some(_)) = (&opts.cpu, opts.gpu_only, has_accel, need) {
         if c.gbps > 0.0 && c.usable_mb > 0 && (model.block_count > 0) {
             cand.push(Dev { id: "cpu".into(), name: CPU_NAME.into(), cap: c.usable_mb as f64, speed: c.gbps as f64, rtt_ms: 0.0,
                 forced: false, gpu: false, cpu: true, j: 0, device: Some("CPU".into()), thermal: 1.0 });

@@ -10,7 +10,11 @@ pub fn mmproj_args(mmproj: Option<&str>, hf_repo: Option<&str>) -> Vec<String> {
         return vec!["--mmproj-url".into(), m.into()];
     }
     let local = std::path::Path::new(m);
-    if local.is_absolute() || local.exists() || m.contains('\\') {
+    // A local file: an absolute path (Windows "C:\\...", POSIX "/...") or an existing file.
+    // A relative path with slashes is an HF path ("owner/repo/file.gguf") and becomes --mmproj-url.
+    let is_local = local.is_absolute() || local.exists()
+        || m.starts_with('/') || m.contains('\\') || m.contains(':');
+    if is_local {
         return vec!["--mmproj".into(), m.into()];
     }
     let parts: Vec<&str> = m.split('/').collect();
